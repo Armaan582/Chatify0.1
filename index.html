@@ -603,53 +603,59 @@
     <script>
         const SOCKET_URL = "wss://chatify0-1.onrender.com";
         let socket;
+        let reconnectTimeout = null;
 
         function connectSocket(username) {
+            // Close old socket if exists
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.close();
+            }
+
             socket = new WebSocket(SOCKET_URL);
-            
+
             socket.onopen = () => {
-                socket.send(JSON.stringify({ username: username }));
+                console.log("✅ WebSocket connected");
+                socket.send(JSON.stringify({ username }));
             };
 
             socket.onmessage = (e) => {
                 const data = JSON.parse(e.data);
-                
+
+                // ONLINE USERS
                 if (data.type === "online_users") {
-                    const rawUsers = data.users || [];
                     const localUsers = DB.getUsers();
-                    
-                    ONLINE_USERS = rawUsers.map(uString => {
-                        const localProfile = localUsers.find(u => u.username === uString);
-                        if (localProfile) return localProfile;
-                        return {
-                            username: uString,
-                            name: uString,
-                            avatar: `https://ui-avatars.com/api/?background=random&name=${uString}`
+                    ONLINE_USERS = (data.users || []).map(u => {
+                        const local = localUsers.find(x => x.username === u);
+                        return local || {
+                            username: u,
+                            name: u,
+                            avatar: `https://ui-avatars.com/api/?background=random&name=${u}`
                         };
                     });
 
-                    if(document.getElementById('new-chat-sheet').classList.contains('open')) renderUserList(document.getElementById('search-input').value || '');
-                    if(document.getElementById('home-screen').classList.contains('active')) loadHome();
+                    if (document.getElementById('home-screen').classList.contains('active')) {
+                        loadHome();
+                    }
                 }
 
+                // MESSAGE
                 if (data.type === "message") {
                     const cid = getChatId(currentUser.username, data.from);
                     const chats = DB.getChats();
                     if (!chats[cid]) chats[cid] = [];
-                    
-                    const newMsg = {
+
+                    chats[cid].push({
                         id: Date.now(),
                         sender: data.from,
                         text: data.text,
-                        time: data.time || new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),
+                        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                         timestamp: Date.now(),
-                        status: 'seen', 
+                        status: 'seen',
                         reaction: null
-                    };
-                    
-                    chats[cid].push(newMsg);
+                    });
+
                     DB.setChats(chats);
-                    
+
                     if (activeChatUserId === data.from) {
                         renderMessages();
                         scrollToBottom();
@@ -659,11 +665,23 @@
                     }
                 }
 
+                // TYPING
                 if (data.type === "typing") {
-                    if (activeChatUserId === data.from && document.getElementById('chat-screen').classList.contains('active')) {
+                    if (activeChatUserId === data.from) {
                         updateTypingUI(data.status);
                     }
                 }
+            };
+
+            socket.onclose = () => {
+                console.warn("⚠️ WebSocket closed, reconnecting...");
+                reconnectTimeout = setTimeout(() => {
+                    connectSocket(username);
+                }, 3000);
+            };
+
+            socket.onerror = () => {
+                socket.close();
             };
         }
 
@@ -1379,9 +1397,14 @@
             }
         }
 
+        setInterval(() => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "ping" }));
+            }
+        }, 25000);
+
         window.onload = checkAuth;
     </script>
 </body>
 
 </html>
-
